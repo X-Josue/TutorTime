@@ -23,6 +23,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     if ($resultado->num_rows > 0) {
         $error = "Correo ya registrado";
+        if(isset($error)) { echo "<p style='color: red;'>$error</p>"; } 
     } else {
 
         $hash = password_hash($contrasena, PASSWORD_DEFAULT);
