@@ -340,7 +340,13 @@ $stmt->close();
             <a href="crear_materias.php" class="btn-link">
                 <button type="button" class="btn">Crear clase</button>
             </a>
-        <?php else: ?>
+            <a href="crear_oferta_tutoria.php" class="btn-link">
+                <button type="button" class="btn">Ofrecer tutoría</button>
+            </a>
+        <?php elseif ($tipo === "Alumno"): ?>
+            <a href="catalogo_materias.php" class="btn-link">
+                <button type="button" class="btn">Buscar tutorías</button>
+            </a>
             <button type="button" class="btn" id="btnUnirseClase">Unirse a clase</button>
         <?php endif; ?>
 
