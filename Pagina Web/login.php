@@ -19,6 +19,10 @@
         <h2 class="title">TutorTime</h2>
         <p class="subtitle">Inicia sesión para continuar</p>
 
+        <?php if (isset($_GET['error'])): ?>
+            <p class="text-danger" role="alert">Correo o contraseña incorrectos.</p>
+        <?php endif; ?>
+
         <form action="login_process.php" method="POST">
 
             <div class="form-group">

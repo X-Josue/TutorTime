@@ -6,20 +6,20 @@ if (!isset($_SESSION['id'])) {
     exit();
 }
 
-$conexion = new mysqli("localhost", "root", "", "tutortime");
+require_once __DIR__ . '/conexion.php';
 
-if ($conexion->connect_error) {
-    die("Error de conexión: " . $conexion->connect_error);
+function e($valor) {
+    return htmlspecialchars((string)$valor, ENT_QUOTES, 'UTF-8');
 }
-
-$conexion->set_charset("utf8mb4");
 
 $tipo = $_SESSION['tipo'] ?? '';
 $nombre = $_SESSION['nombre'] ?? '';
 $usuario_id = (int)($_SESSION['id'] ?? 0);
+$abrir_chat_id = (int)($_GET['abrir_chat'] ?? 0);
+
 
 /* =========================================================
-   FUNCIONES DEL CHAT
+   FUNCIONES DEL CHAT INDIVIDUAL
 ========================================================= */
 
 function responder_json($datos)
@@ -30,88 +30,135 @@ function responder_json($datos)
 }
 
 /*
-    Verifica que el usuario realmente tenga acceso
-    al chat de determinada materia.
-*/
-function usuario_puede_ver_chat($conexion, $usuario_id, $tipo, $materia_id)
+ * Comprueba que la solicitud exista, esté confirmada
+ * y pertenezca al alumno o tutor que intenta acceder.
+ */
+function obtener_solicitud_chat($conexion, $solicitud_id, $usuario_id, $tipo)
 {
-    if ($tipo === 'Tutor') {
-        $stmt = $conexion->prepare("SELECT id FROM materias WHERE id = ? AND tutor_id = ? LIMIT 1");
-        $stmt->bind_param("ii", $materia_id, $usuario_id);
-    } else {
-        $stmt = $conexion->prepare("SELECT m.id FROM materias m INNER JOIN alumnos_materias am ON am.materia_id = m.id WHERE m.id = ? AND am.alumno_id = ? LIMIT 1");
-        $stmt->bind_param("ii", $materia_id, $usuario_id);
-    }
+    $stmt = $conexion->prepare("
+        SELECT
+            s.id,
+            s.alumno_id,
+            s.tutor_id,
+            o.materia_id,
+            s.tema_solicitado,
+            o.titulo,
+            c.nombre AS materia_nombre,
+            ua.nombres AS alumno_nombre,
+            ua.apellidos AS alumno_apellidos,
+            ut.nombres AS tutor_nombre,
+            ut.apellidos AS tutor_apellidos
+        FROM solicitudes_tutorias s
+        INNER JOIN tutor_ofertas o ON o.id = s.oferta_id
+        INNER JOIN catalogo_materias c ON c.id = o.materia_id
+        INNER JOIN usuarios ua ON ua.id = s.alumno_id
+        INNER JOIN usuarios ut ON ut.id = s.tutor_id
+        WHERE s.id = ?
+          AND s.tipo = 'reserva'
+          AND s.estado = 'confirmada'
+          AND (
+              (s.alumno_id = ? AND ? = 'Alumno')
+              OR
+              (s.tutor_id = ? AND ? = 'Tutor')
+          )
+        LIMIT 1
+    ");
+
+    $stmt->bind_param(
+        "iisis",
+        $solicitud_id,
+        $usuario_id,
+        $tipo,
+        $usuario_id,
+        $tipo
+    );
 
     $stmt->execute();
-    $permitido = $stmt->get_result()->num_rows > 0;
+    $resultado = $stmt->get_result();
+    $solicitud = $resultado->fetch_assoc();
     $stmt->close();
 
-    return $permitido;
+    return $solicitud ?: null;
 }
 
 /*
-    Busca el chat de una materia.
-    Si por alguna razón la materia todavía no tiene
-    chat, lo crea automáticamente.
-*/
-function obtener_chat_id($conexion, $materia_id)
+ * Recupera el chat de una solicitud o lo crea
+ * si todavía no existe.
+ */
+function obtener_chat_id($conexion, $solicitud_id, $materia_id)
 {
-    $stmt = $conexion->prepare("SELECT id FROM chats WHERE materia_id = ? LIMIT 1");
-    $stmt->bind_param("i", $materia_id);
+    $stmt = $conexion->prepare(
+        "SELECT id FROM chats WHERE solicitud_id = ? LIMIT 1"
+    );
+    $stmt->bind_param("i", $solicitud_id);
     $stmt->execute();
 
     $resultado = $stmt->get_result();
     $chat = $resultado->fetch_assoc();
     $stmt->close();
 
-    if (!$chat) {
-        $stmt = $conexion->prepare("INSERT INTO chats (materia_id) VALUES (?)");
-        $stmt->bind_param("i", $materia_id);
-        $stmt->execute();
-        $chat_id = $stmt->insert_id;
-        $stmt->close();
-
-        return $chat_id;
+    if ($chat) {
+        return (int)$chat['id'];
     }
 
-    return (int)$chat['id'];
+    $stmt = $conexion->prepare(
+        "INSERT INTO chats (materia_id, solicitud_id) VALUES (?, ?)"
+    );
+    $stmt->bind_param("ii", $materia_id, $solicitud_id);
+    $stmt->execute();
+
+    $chat_id = (int)$stmt->insert_id;
+    $stmt->close();
+
+    return $chat_id;
 }
 
 /* =========================================================
    API DEL CHAT
-   Todo se maneja desde menu.php
 ========================================================= */
 
 if (isset($_GET['chat_action'])) {
     $accion = $_GET['chat_action'];
 
-    /* =====================================================
-       LISTAR CHATS
-    ===================================================== */
+    /* LISTAR SOLICITUDES CONFIRMADAS */
     if ($accion === 'list') {
-        /*
-            Si es Tutor: aparecen los chats de sus propias clases.
-            Si es Alumno: aparecen solamente los chats de las clases
-            en las que está inscrito.
-        */
-        if ($tipo === 'Tutor') {
-            $stmt = $conexion->prepare("SELECT m.id AS materia_id, m.nombre AS materia_nombre, u.nombres AS tutor_nombre, u.apellidos AS tutor_apellidos FROM materias m INNER JOIN usuarios u ON u.id = m.tutor_id WHERE m.tutor_id = ? ORDER BY m.fecha_creacion DESC");
-            $stmt->bind_param("i", $usuario_id);
-        } else {
-            $stmt = $conexion->prepare("SELECT m.id AS materia_id, m.nombre AS materia_nombre, u.nombres AS tutor_nombre, u.apellidos AS tutor_apellidos FROM materias m INNER JOIN alumnos_materias am ON am.materia_id = m.id INNER JOIN usuarios u ON u.id = m.tutor_id WHERE am.alumno_id = ? ORDER BY m.fecha_creacion DESC");
-            $stmt->bind_param("i", $usuario_id);
-        }
+        $stmt = $conexion->prepare("
+            SELECT
+                s.id AS solicitud_id,
+                o.materia_id,
+                c.nombre AS materia_nombre,
+                s.tema_solicitado,
+                u.nombres AS tutor_nombre,
+                u.apellidos AS tutor_apellidos
+            FROM solicitudes_tutorias s
+            INNER JOIN tutor_ofertas o ON o.id = s.oferta_id
+            INNER JOIN catalogo_materias c ON c.id = o.materia_id
+            INNER JOIN usuarios u ON u.id = s.tutor_id
+            WHERE s.tipo = 'reserva'
+              AND s.estado = 'confirmada'
+              AND (
+                  (s.alumno_id = ? AND ? = 'Alumno')
+                  OR
+                  (s.tutor_id = ? AND ? = 'Tutor')
+              )
+            ORDER BY s.fecha_actualizacion DESC, s.id DESC
+        ");
 
+        $stmt->bind_param("isis", $usuario_id, $tipo, $usuario_id, $tipo);
         $stmt->execute();
+
         $resultado = $stmt->get_result();
         $chats = [];
 
         while ($fila = $resultado->fetch_assoc()) {
             $chats[] = [
+                'solicitud_id' => (int)$fila['solicitud_id'],
                 'materia_id' => (int)$fila['materia_id'],
                 'materia_nombre' => $fila['materia_nombre'],
-                'tutor_nombre' => trim($fila['tutor_nombre'] . ' ' . $fila['tutor_apellidos'])
+                'tema_solicitado' => $fila['tema_solicitado'],
+                'tutor_nombre' => trim(
+                    $fila['tutor_nombre'] . ' ' . $fila['tutor_apellidos']
+                )
             ];
         }
 
@@ -123,26 +170,44 @@ if (isset($_GET['chat_action'])) {
         ]);
     }
 
-    /* =====================================================
-       OBTENER MENSAJES
-    ===================================================== */
+    /* OBTENER MENSAJES */
     if ($accion === 'messages') {
-        $materia_id = (int)($_GET['materia_id'] ?? 0);
+        $solicitud_id = (int)($_GET['solicitud_id'] ?? 0);
 
-        /*
-            Seguridad: el usuario debe pertenecer a la clase
-            o ser el tutor de esa clase.
-        */
-        if ($materia_id <= 0 || !usuario_puede_ver_chat($conexion, $usuario_id, $tipo, $materia_id)) {
+        $solicitud = obtener_solicitud_chat(
+            $conexion,
+            $solicitud_id,
+            $usuario_id,
+            $tipo
+        );
+
+        if (!$solicitud) {
             responder_json([
                 'success' => false,
                 'message' => 'No tienes permiso para ver este chat.'
             ]);
         }
 
-        $chat_id = obtener_chat_id($conexion, $materia_id);
+        $chat_id = obtener_chat_id(
+            $conexion,
+            $solicitud_id,
+            (int)$solicitud['materia_id']
+        );
 
-        $stmt = $conexion->prepare("SELECT mc.id, mc.usuario_id, mc.mensaje, DATE_FORMAT(mc.fecha, '%H:%i') AS hora, u.nombres AS nombre, u.apellidos AS apellidos FROM mensajes_chat mc INNER JOIN usuarios u ON u.id = mc.usuario_id WHERE mc.chat_id = ? ORDER BY mc.fecha ASC, mc.id ASC");
+        $stmt = $conexion->prepare("
+            SELECT
+                mc.id,
+                mc.usuario_id,
+                mc.mensaje,
+                DATE_FORMAT(mc.fecha, '%H:%i') AS hora,
+                u.nombres AS nombre,
+                u.apellidos AS apellidos
+            FROM mensajes_chat mc
+            INNER JOIN usuarios u ON u.id = mc.usuario_id
+            WHERE mc.chat_id = ?
+            ORDER BY mc.fecha ASC, mc.id ASC
+        ");
+
         $stmt->bind_param("i", $chat_id);
         $stmt->execute();
 
@@ -153,7 +218,9 @@ if (isset($_GET['chat_action'])) {
             $mensajes[] = [
                 'id' => (int)$fila['id'],
                 'usuario_id' => (int)$fila['usuario_id'],
-                'nombre' => trim($fila['nombre'] . ' ' . $fila['apellidos']),
+                'nombre' => trim(
+                    $fila['nombre'] . ' ' . $fila['apellidos']
+                ),
                 'mensaje' => $fila['mensaje'],
                 'hora' => $fila['hora']
             ];
@@ -163,28 +230,31 @@ if (isset($_GET['chat_action'])) {
 
         responder_json([
             'success' => true,
-            'materia_id' => $materia_id,
+            'solicitud_id' => $solicitud_id,
             'chat_id' => $chat_id,
             'mensajes' => $mensajes
         ]);
     }
 
-    /* =====================================================
-       ENVIAR MENSAJE
-    ===================================================== */
+    /* ENVIAR MENSAJE */
     if ($accion === 'send' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-        $materia_id = (int)($_POST['materia_id'] ?? 0);
+        $solicitud_id = (int)($_POST['solicitud_id'] ?? 0);
         $mensaje = trim($_POST['mensaje'] ?? '');
 
-        /* Verificar permisos */
-        if ($materia_id <= 0 || !usuario_puede_ver_chat($conexion, $usuario_id, $tipo, $materia_id)) {
+        $solicitud = obtener_solicitud_chat(
+            $conexion,
+            $solicitud_id,
+            $usuario_id,
+            $tipo
+        );
+
+        if (!$solicitud) {
             responder_json([
                 'success' => false,
                 'message' => 'No tienes permiso para usar este chat.'
             ]);
         }
 
-        /* Mensaje vacío */
         if ($mensaje === '') {
             responder_json([
                 'success' => false,
@@ -192,7 +262,6 @@ if (isset($_GET['chat_action'])) {
             ]);
         }
 
-        /* Máximo 2000 caracteres */
         if (mb_strlen($mensaje) > 2000) {
             responder_json([
                 'success' => false,
@@ -200,20 +269,18 @@ if (isset($_GET['chat_action'])) {
             ]);
         }
 
-        $chat_id = obtener_chat_id($conexion, $materia_id);
+        $chat_id = obtener_chat_id(
+            $conexion,
+            $solicitud_id,
+            (int)$solicitud['materia_id']
+        );
 
-        /* Guardar mensaje */
-        $stmt = $conexion->prepare("INSERT INTO mensajes_chat (chat_id, usuario_id, mensaje) VALUES (?, ?, ?)");
+        $stmt = $conexion->prepare("
+            INSERT INTO mensajes_chat (chat_id, usuario_id, mensaje)
+            VALUES (?, ?, ?)
+        ");
         $stmt->bind_param("iis", $chat_id, $usuario_id, $mensaje);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            responder_json([
-                'success' => false,
-                'message' => 'No se pudo guardar el mensaje.'
-            ]);
-        }
-
+        $stmt->execute();
         $stmt->close();
 
         responder_json([
@@ -234,84 +301,69 @@ $mensaje_error = "";
 $mostrar_exito = false;
 
 /* =========================================================
-   UNIRSE A UNA CLASE
+   UNIRSE A UNA CLASE-- Ya lo borre
 ========================================================= */
-if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['unirse_clase_submit'])) {
-    if ($tipo !== "Alumno") {
-        $mensaje_error = "Solo los alumnos pueden unirse a una clase.";
-    } else {
-        $codigo = strtoupper(trim($_POST['codigo'] ?? ''));
 
-        if ($codigo === '') {
-            $mensaje_error = "Debes introducir el código de la clase.";
-        } else {
-            $stmt = $conexion->prepare("SELECT id, nombre FROM materias WHERE codigo = ? LIMIT 1");
-            $stmt->bind_param("s", $codigo);
-            $stmt->execute();
-            $res = $stmt->get_result();
-
-            if ($res->num_rows === 0) {
-                $mensaje_error = "No existe ninguna clase con ese código.";
-            } else {
-                $materia = $res->fetch_assoc();
-                $materia_id = (int)$materia['id'];
-
-                /* Verificar si ya está inscrito */
-                $stmtCheck = $conexion->prepare("SELECT id FROM alumnos_materias WHERE alumno_id = ? AND materia_id = ? LIMIT 1");
-                $stmtCheck->bind_param("ii", $usuario_id, $materia_id);
-                $stmtCheck->execute();
-
-                if ($stmtCheck->get_result()->num_rows > 0) {
-                    $mensaje_error = "Ya estás inscrito en esta clase.";
-                } else {
-                    $stmtIns = $conexion->prepare("INSERT INTO alumnos_materias (alumno_id, materia_id) VALUES (?, ?)");
-                    $stmtIns->bind_param("ii", $usuario_id, $materia_id);
-
-                    if ($stmtIns->execute()) {
-                        /* Garantizar que exista el chat de la clase. */
-                        obtener_chat_id($conexion, $materia_id);
-
-                        header("Location: menu.php?exito=1");
-                        exit();
-                    } else {
-                        $mensaje_error = "Ocurrió un error al unirte a la clase.";
-                    }
-
-                    $stmtIns->close();
-                }
-
-                $stmtCheck->close();
-            }
-
-            $stmt->close();
-        }
-    }
-}
 
 if (isset($_GET['exito']) && $_GET['exito'] === '1') {
     $mostrar_exito = true;
 }
 
 /* =========================================================
-   OBTENER LAS MATERIAS DEL USUARIO
+   OBTENER LAS MATERIAS DEL USUARIO--YA LO BORRE
 ========================================================= */
+/* =========================================================
+   OBTENER INFORMACIÓN DE TUTORÍAS SEGÚN EL ROL
+========================================================= */
+$tutorias = [];
+
 if ($tipo === "Tutor") {
-    $stmt = $conexion->prepare("SELECT * FROM materias WHERE tutor_id = ? ORDER BY fecha_creacion DESC");
+    $stmt = $conexion->prepare("
+        SELECT
+            o.id,
+            o.titulo,
+            o.descripcion,
+            o.estado,
+            c.nombre AS materia
+        FROM tutor_ofertas o
+        INNER JOIN catalogo_materias c ON c.id = o.materia_id
+        WHERE o.tutor_id = ?
+        ORDER BY o.fecha_creacion DESC
+    ");
+
     $stmt->bind_param("i", $usuario_id);
-} else {
-    $stmt = $conexion->prepare("SELECT materias.* FROM materias INNER JOIN alumnos_materias ON materias.id = alumnos_materias.materia_id WHERE alumnos_materias.alumno_id = ? ORDER BY materias.fecha_creacion DESC");
+} elseif ($tipo === "Alumno") {
+    $stmt = $conexion->prepare("
+        SELECT
+            s.id,
+            s.tema_solicitado AS titulo,
+            s.estado,
+            s.tipo,
+            s.fecha_solicitud,
+            u.nombres AS tutor_nombres,
+            u.apellidos AS tutor_apellidos,
+            c.nombre AS materia
+        FROM solicitudes_tutorias s
+        INNER JOIN usuarios u ON u.id = s.tutor_id
+        LEFT JOIN tutor_ofertas o ON o.id = s.oferta_id
+        LEFT JOIN catalogo_materias c ON c.id = o.materia_id
+        WHERE s.alumno_id = ?
+        ORDER BY s.fecha_solicitud DESC
+    ");
+
     $stmt->bind_param("i", $usuario_id);
 }
 
-$stmt->execute();
-$resultado = $stmt->get_result();
-$materias = [];
+if (isset($stmt)) {
+    $stmt->execute();
+    $resultado = $stmt->get_result();
 
-while ($m = $resultado->fetch_assoc()) {
-    $materias[] = $m;
+    while ($fila = $resultado->fetch_assoc()) {
+        $tutorias[] = $fila;
+    }
+
+    $stmt->close();
 }
-
-$stmt->close();
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -328,7 +380,7 @@ $stmt->close();
 ===================================================== -->
 <header class="header">
     <div class="user">
-        <?php echo htmlspecialchars($nombre); ?>
+        <?php echo e($nombre); ?>
     </div>
 
     <div class="logo">
@@ -337,17 +389,19 @@ $stmt->close();
 
     <div class="header-right">
         <?php if ($tipo === "Tutor"): ?>
-            <a href="crear_materias.php" class="btn-link">
-                <button type="button" class="btn">Crear clase</button>
-            </a>
             <a href="crear_oferta_tutoria.php" class="btn-link">
                 <button type="button" class="btn">Ofrecer tutoría</button>
+            </a>
+            <a href="solicitudes_tutor.php" class="btn-link">
+                <button type="button" class="btn">Solicitudes de tutoría</button>
             </a>
         <?php elseif ($tipo === "Alumno"): ?>
             <a href="catalogo_materias.php" class="btn-link">
                 <button type="button" class="btn">Buscar tutorías</button>
             </a>
-            <button type="button" class="btn" id="btnUnirseClase">Unirse a clase</button>
+            <a href="mis_solicitudes_tutoria.php" class="btn-link">
+                <button type="button" class="btn">Mis solicitudes</button>
+            </a>
         <?php endif; ?>
 
         <button type="button" class="btn" id="btnChat">Chat</button>
@@ -366,44 +420,109 @@ $stmt->close();
 
         <hr>
 
-        <h4 class="sidebar-title">Tus clases</h4>
+        <h4 class="sidebar-title">
+            <?php echo ($tipo === "Tutor") ? "Mis ofertas" : "Mis tutorías"; ?>
+        </h4>
 
-        <?php if (count($materias) > 0): ?>
-            <?php foreach ($materias as $materia): ?>
+        <?php if (count($tutorias) > 0): ?>
+            <?php foreach ($tutorias as $tutoria): ?>
                 <div class="class-item">
-                    <?php echo htmlspecialchars($materia['nombre']); ?>
+                    <?php echo e($tutoria['titulo']); ?>
                 </div>
             <?php endforeach; ?>
         <?php else: ?>
-            <p class="no-classes-sidebar">No tienes clases todavía.</p>
+            <p class="no-classes-sidebar">
+                <?php echo ($tipo === "Tutor")
+                    ? "Todavía no tienes ofertas de tutoría."
+                    : "Todavía no tienes solicitudes de tutoría."; ?>
+            </p>
         <?php endif; ?>
     </aside>
 
     <!-- CONTENIDO -->
     <main class="content">
-        <h2>Tus clases</h2>
+        <h2>
+            <?php echo ($tipo === "Tutor")
+                ? "Mis ofertas de tutoría"
+                : "Mis tutorías"; ?>
+        </h2>
 
         <div class="classes-grid">
-            <?php if (count($materias) > 0): ?>
-                <?php foreach ($materias as $materia): ?>
+            <?php if (count($tutorias) > 0): ?>
+
+                <?php foreach ($tutorias as $tutoria): ?>
                     <div class="class-card">
-                        <h3><?php echo htmlspecialchars($materia['nombre']); ?></h3>
-                        <p><?php echo htmlspecialchars($materia['descripcion']); ?></p>
-                        <small>Código: <strong><?php echo htmlspecialchars($materia['codigo']); ?></strong></small>
+                        <h3><?php echo e($tutoria['titulo']); ?></h3>
+
+                        <?php if ($tipo === "Tutor"): ?>
+
+                            <p>
+                                Materia:
+                                <?php echo e($tutoria['materia']); ?>
+                            </p>
+
+                            <p>
+                                Estado:
+                                <?php echo e($tutoria['estado']); ?>
+                            </p>
+
+                            <?php if (!empty($tutoria['descripcion'])): ?>
+                                <p><?php echo e($tutoria['descripcion']); ?></p>
+                            <?php endif; ?>
+
+                        <?php else: ?>
+
+                            <p>
+                                Tutor:
+                                <?php
+                                echo e(
+                                    trim(
+                                        ($tutoria['tutor_nombres'] ?? '') . ' ' .
+                                        ($tutoria['tutor_apellidos'] ?? '')
+                                    )
+                                );
+                                ?>
+                            </p>
+
+                            <?php if (!empty($tutoria['materia'])): ?>
+                                <p>
+                                    Materia:
+                                    <?php echo e($tutoria['materia']); ?>
+                                </p>
+                            <?php endif; ?>
+
+                            <p>
+                                Tipo:
+                                <?php echo ($tutoria['tipo'] === 'reserva')
+                                    ? 'Reserva de tutoría'
+                                    : 'Consulta de tema'; ?>
+                            </p>
+
+                            <p>
+                                Estado:
+                                <?php echo e($tutoria['estado']); ?>
+                            </p>
+
+                        <?php endif; ?>
                     </div>
                 <?php endforeach; ?>
+
             <?php else: ?>
+
                 <div class="empty-classes">
-                    <h3>No tienes clases todavía</h3>
                     <?php if ($tipo === "Tutor"): ?>
-                        <p>Crea tu primera clase para comenzar.</p>
+                        <h3>Aún no tienes ofertas de tutoría</h3>
+                        <p>Utiliza «Ofrecer tutoría» para publicar tu primera oferta.</p>
                     <?php else: ?>
-                        <p>Únete a una clase utilizando el código proporcionado por tu tutor.</p>
+                        <h3>Aún no tienes solicitudes de tutoría</h3>
+                        <p>Busca una materia en el catálogo para solicitar una tutoría.</p>
                     <?php endif; ?>
                 </div>
+
             <?php endif; ?>
         </div>
     </main>
+
 </div>
 
 <!-- =====================================================
@@ -458,41 +577,8 @@ $stmt->close();
 </aside>
 
 <!-- =====================================================
-     MODAL UNIRSE A CLASE
+     MODAL UNIRSE A CLASE-- YA LO BORRE
 ===================================================== -->
-<?php if ($tipo === "Alumno"): ?>
-<div id="modalClase" class="modal-overlay <?php echo ($mensaje_error !== '') ? 'active' : ''; ?>">
-    <div class="modal-card">
-        <button type="button" class="modal-close" id="cerrarModal">&times;</button>
-
-        <h2>Unirse a una clase</h2>
-        <p>Introduce el código proporcionado por tu tutor.</p>
-
-        <?php if ($mensaje_error !== ''): ?>
-            <div class="error-message">
-                <?php echo htmlspecialchars($mensaje_error); ?>
-            </div>
-        <?php endif; ?>
-
-        <form method="POST" action="menu.php">
-            <input type="text" name="codigo" class="class-code-input" placeholder="Ejemplo: PRO-5800" maxlength="20" required autocomplete="off">
-            <button type="submit" name="unirse_clase_submit" class="modal-submit">Unirse a clase</button>
-        </form>
-    </div>
-</div>
-
-<!-- MODAL DE ÉXITO -->
-<div id="modalExito" class="modal-overlay <?php echo ($mostrar_exito) ? 'active' : ''; ?>">
-    <div class="modal-card">
-        <div class="success-icon">&#10004;</div>
-        <h2>¡Operación Exitosa!</h2>
-        <p>La materia se añadió con éxito.</p>
-        <a href="menu.php" class="success-button-link">
-            <button type="button" class="modal-submit">Aceptar</button>
-        </a>
-    </div>
-</div>
-<?php endif; ?>
 
 <script>
 /* =========================================================
@@ -513,6 +599,7 @@ const messageInput = document.getElementById('messageInput');
 
 let chatActual = null;
 let intervaloMensajes = null;
+const solicitudChatInicial = <?php echo $abrir_chat_id; ?>;
 
 /* =========================================================
    ABRIR PANEL
@@ -553,6 +640,17 @@ function cargarListaChats() {
 
         chatList.innerHTML = '';
 
+                if (solicitudChatInicial > 0) {
+            const chatEncontrado = data.chats.find(
+                chat => Number(chat.solicitud_id) === solicitudChatInicial
+            );
+
+            if (chatEncontrado) {
+                abrirConversacion(chatEncontrado);
+                return;
+            }
+        }
+
         data.chats.forEach(chat => {
             const item = document.createElement('button');
             item.type = 'button';
@@ -566,8 +664,7 @@ function cargarListaChats() {
             info.className = 'chat-item-info';
 
             const nombreClase = document.createElement('strong');
-            nombreClase.textContent = chat.materia_nombre;
-
+            nombreClase.textContent = chat.tema_solicitado || chat.materia_nombre;
             const nombreTutor = document.createElement('span');
 
             <?php if ($tipo === 'Tutor'): ?>
@@ -633,8 +730,7 @@ function cargarMensajes(scrollAlFinal = false) {
         return;
     }
 
-    fetch('menu.php?chat_action=messages&materia_id=' + encodeURIComponent(chatActual.materia_id))
-    .then(response => response.json())
+        fetch('menu.php?chat_action=messages&solicitud_id=' + encodeURIComponent(chatActual.solicitud_id))    .then(response => response.json())
     .then(data => {
         if (!data.success) {
             messagesContainer.innerHTML = '<div class="chat-empty">No tienes permiso para ver este chat.</div>';
@@ -719,7 +815,7 @@ messageForm.addEventListener('submit', function(e) {
     }
 
     const datos = new FormData();
-    datos.append('materia_id', chatActual.materia_id);
+    datos.append('solicitud_id', chatActual.solicitud_id);
     datos.append('mensaje', mensaje);
 
     const boton = document.getElementById('btnEnviarMensaje');
@@ -758,36 +854,17 @@ btnChat.addEventListener('click', function() {
         abrirChatPanel();
     }
 });
+if (solicitudChatInicial > 0) {
+    abrirChatPanel();
+}
 
 btnCerrarChat.addEventListener('click', cerrarChatPanel);
 btnVolverChats.addEventListener('click', volverAListaChats);
 
 /* =========================================================
-   MODAL UNIRSE A CLASE
+   MODAL UNIRSE A CLASE -- YA LO BORRE
 ========================================================= */
-const btnAbrirClase = document.getElementById('btnUnirseClase');
-const modalClase = document.getElementById('modalClase');
-const btnCerrarClase = document.getElementById('cerrarModal');
 
-if (btnAbrirClase && modalClase) {
-    btnAbrirClase.addEventListener('click', function() {
-        modalClase.classList.add('active');
-    });
-}
-
-if (btnCerrarClase && modalClase) {
-    btnCerrarClase.addEventListener('click', function() {
-        modalClase.classList.remove('active');
-    });
-}
-
-if (modalClase) {
-    modalClase.addEventListener('click', function(e) {
-        if (e.target === modalClase) {
-            modalClase.classList.remove('active');
-        }
-    });
-}
 </script>
 </body>
 </html>

@@ -10,9 +10,7 @@ if (($_SESSION['tipo'] ?? '') !== 'Tutor') {
     exit();
 }
 
-mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-$conexion = new mysqli("localhost", "root", "", "tutortime");
-$conexion->set_charset("utf8mb4");
+require_once __DIR__ . '/conexion.php';
 
 function e($valor) {
     return htmlspecialchars((string)$valor, ENT_QUOTES, 'UTF-8');

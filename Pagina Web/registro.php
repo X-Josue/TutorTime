@@ -1,55 +1,63 @@
 <?php
 session_start();
+require_once __DIR__ . '/conexion.php';
 
-$conexion = new mysqli("localhost", "root", "", "tutortime");
+$error = '';
+$nombres = '';
+$apellidos = '';
+$correo = '';
+$rol = '';
 
-if ($conexion->connect_error) {
-    die("Error de conexión: " . $conexion->connect_error);
-}
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $nombres = trim($_POST['nombres'] ?? '');
+    $apellidos = trim($_POST['apellidos'] ?? '');
+    $correo = trim($_POST['correo'] ?? '');
+    $contrasena = $_POST['contrasena'] ?? '';
+    $rol = $_POST['rol'] ?? '';
 
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-
-    $nombres = $_POST['nombres'];
-    $apellidos = $_POST['apellidos'];
-    $correo = $_POST['correo'];
-    $contrasena = $_POST['contrasena'];
-    $rol = $_POST['rol'];
-
-    // Verificar duplicado
-    $stmt = $conexion->prepare("SELECT id FROM usuarios WHERE correo = ?");
-    $stmt->bind_param("s", $correo);
-    $stmt->execute();
-    $resultado = $stmt->get_result();
-
-    if ($resultado->num_rows > 0) {
-        $error = "Correo ya registrado";
-        if(isset($error)) { echo "<p style='color: red;'>$error</p>"; } 
+    if ($nombres === '' || $apellidos === '' || $correo === '' || $contrasena === '') {
+        $error = 'Completa todos los campos.';
+    } elseif (!filter_var($correo, FILTER_VALIDATE_EMAIL)) {
+        $error = 'Escribe un correo electrónico válido.';
+    } elseif (!in_array($rol, ['Alumno', 'Tutor'], true)) {
+        $error = 'Selecciona un rol válido.';
+    } elseif (strlen($contrasena) < 8) {
+        $error = 'La contraseña debe tener al menos 8 caracteres.';
     } else {
+        $stmt = $conexion->prepare("SELECT id FROM usuarios WHERE correo = ? LIMIT 1");
+        $stmt->bind_param("s", $correo);
+        $stmt->execute();
+        $correo_existe = $stmt->get_result()->num_rows > 0;
+        $stmt->close();
 
-        $hash = password_hash($contrasena, PASSWORD_DEFAULT);
+        if ($correo_existe) {
+            $error = 'Ese correo ya está registrado.';
+        } else {
+            $hash = password_hash($contrasena, PASSWORD_DEFAULT);
+            $stmt = $conexion->prepare(
+                "INSERT INTO usuarios (nombres, apellidos, correo, contrasena, rol)
+                 VALUES (?, ?, ?, ?, ?)"
+            );
+            $stmt->bind_param("sssss", $nombres, $apellidos, $correo, $hash, $rol);
+            $stmt->execute();
 
-        $stmt = $conexion->prepare("INSERT INTO usuarios (nombres, apellidos, correo, contrasena, rol) VALUES (?, ?, ?, ?, ?)");
-        $stmt->bind_param("sssss", $nombres, $apellidos, $correo, $hash, $rol);
-
-        if ($stmt->execute()) {
-
-            $_SESSION['id'] = $stmt->insert_id;
+            session_regenerate_id(true);
+            $_SESSION['id'] = (int)$stmt->insert_id;
             $_SESSION['correo'] = $correo;
             $_SESSION['tipo'] = $rol;
-            $_SESSION['nombre'] = $nombres; 
+            $_SESSION['nombre'] = $nombres;
+            $stmt->close();
 
-            header("Location: menu.php");
+            header('Location: menu.php');
             exit();
-
-        } else {
-            $error = "Error al registrar";
         }
     }
+}
 
-    $stmt->close();
+function e($valor) {
+    return htmlspecialchars((string)$valor, ENT_QUOTES, 'UTF-8');
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -68,22 +76,24 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <h2 class="title">Crear cuenta</h2>
         <p class="subtitle">Únete a TutorTime</p>
 
-        <?php if(isset($error)) echo "<p style='color:red;'>$error</p>"; ?>
+        <?php if ($error !== ''): ?>
+            <p class="text-danger" role="alert"><?= e($error) ?></p>
+        <?php endif; ?>
 
         <form method="POST">
 
-            <input type="text" name="nombres" class="form-control input-apple mb-2" placeholder="Nombres" required>
+            <input type="text" name="nombres" class="form-control input-apple mb-2" placeholder="Nombres" maxlength="100" value="<?= e($nombres) ?>" required>
 
-            <input type="text" name="apellidos" class="form-control input-apple mb-2" placeholder="Apellidos" required>
+            <input type="text" name="apellidos" class="form-control input-apple mb-2" placeholder="Apellidos" maxlength="100" value="<?= e($apellidos) ?>" required>
 
-            <input type="email" name="correo" class="form-control input-apple mb-2" placeholder="Correo" required>
+            <input type="email" name="correo" class="form-control input-apple mb-2" placeholder="Correo" maxlength="100" value="<?= e($correo) ?>" required>
 
-            <input type="password" name="contrasena" class="form-control input-apple mb-2" placeholder="Contraseña" required>
+            <input type="password" name="contrasena" class="form-control input-apple mb-2" placeholder="Contraseña" minlength="8" required>
 
             <select name="rol" class="form-control input-apple mb-3" required>
                 <option value="">Selecciona tu rol</option>
-                <option value="Alumno">Alumno</option>
-                <option value="Tutor">Tutor</option>
+                <option value="Alumno" <?= $rol === "Alumno" ? "selected" : "" ?>>Alumno</option>
+                <option value="Tutor" <?= $rol === "Tutor" ? "selected" : "" ?>>Tutor</option>
             </select>
 
             <button type="submit" class="btn btn-dark w-100 btn-apple">

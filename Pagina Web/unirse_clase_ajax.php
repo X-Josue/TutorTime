@@ -1,20 +1,17 @@
 <?php
 session_start();
 header('Content-Type: application/json; charset=utf-8');
-
-// Desactivar impresión de avisos HTML que puedan corromper el JSON en Safari
-error_reporting(0);
-ini_set('display_errors', 0);
+define('TUTORTIME_RESPUESTA_JSON', true);
 
 if (!isset($_SESSION['id'])) {
     echo json_encode(['success' => false, 'message' => 'Sesión no iniciada. Por favor, vuelve a iniciar sesión.']);
     exit();
 }
 
-$conexion = new mysqli("localhost", "root", "", "tutortime");
+require_once __DIR__ . '/conexion.php';
 
-if ($conexion->connect_error) {
-    echo json_encode(['success' => false, 'message' => 'Error de conexión a la base de datos.']);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'message' => 'Solicitud no válida.'], JSON_UNESCAPED_UNICODE);
     exit();
 }
 

@@ -10,9 +10,10 @@ if (($_SESSION['tipo'] ?? '') !== 'Alumno') {
     exit();
 }
 
-mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-$conexion = new mysqli("localhost", "root", "", "tutortime");
-$conexion->set_charset("utf8mb4");
+require_once __DIR__ . '/conexion.php';
+if (empty($_SESSION['csrf_solicitud'])) {
+    $_SESSION['csrf_solicitud'] = bin2hex(random_bytes(32));
+}
 
 function e($valor) {
     return htmlspecialchars((string)$valor, ENT_QUOTES, 'UTF-8');
@@ -60,8 +61,37 @@ try {
                 while ($tema = $tema_res->fetch_assoc()) {
                     $fila['temas'][] = $tema;
                 }
+                
                 $tema_stmt->close();
+
+                // Consultar los horarios disponibles de este tutor.
+                $fila['horarios'] = [];
+
+                $horario_stmt = $conexion->prepare(
+                    "SELECT id, fecha, hora_inicio, hora_fin
+                     FROM disponibilidad_tutores
+                     WHERE tutor_id = ?
+                       AND estado = 'disponible'
+                       AND (
+                           fecha > CURDATE()
+                           OR (fecha = CURDATE() AND hora_inicio > CURTIME())
+                       )
+                     ORDER BY fecha, hora_inicio"
+                );
+
+                $horario_stmt->bind_param("i", $fila['tutor_id']);
+                $horario_stmt->execute();
+
+                $horario_res = $horario_stmt->get_result();
+
+                while ($horario = $horario_res->fetch_assoc()) {
+                    $fila['horarios'][] = $horario;
+                }
+
+                $horario_stmt->close();
+
                 $tutores[] = $fila;
+
             }
             $stmt->close();
         }
@@ -88,6 +118,12 @@ try {
 </header>
 
 <main class="page-container">
+    <?php if (!empty($_SESSION['mensaje_solicitud'])): ?>
+    <section class="notice">
+        <p><?= e($_SESSION['mensaje_solicitud']) ?></p>
+    </section>
+    <?php unset($_SESSION['mensaje_solicitud']); ?>
+<?php endif; ?>
     <?php if ($error_catalogo): ?>
         <section class="notice notice-warning">
             <h2>El catálogo aún no está conectado</h2>
@@ -146,8 +182,131 @@ try {
                             <?php endif; ?>
                         </div>
                         <div class="tutor-actions">
-                            <p class="field-help">La selección de horarios y las consultas sobre otros temas se habilitarán en la siguiente etapa de la implementación.</p>
+                            <strong>Horarios disponibles</strong>
+
+                            <?php if (!empty($tutor['horarios'])): ?>
+                                <ul>
+                                    <?php foreach ($tutor['horarios'] as $horario): ?>
+                                        <li>
+                                            <?= e(date('d/m/Y', strtotime($horario['fecha']))) ?>
+                                            — <?= e(substr($horario['hora_inicio'], 0, 5)) ?>
+                                            a <?= e(substr($horario['hora_fin'], 0, 5)) ?>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php else: ?>
+                                <p class="field-help">
+                                    Este tutor no tiene horarios disponibles por el momento.
+                                </p>
+                            <?php endif; ?>
                         </div>
+                        
+                        <div class="tutor-actions">
+                            <h4>Solicitar tutoría</h4>
+
+                            <form method="POST" action="crear_solicitud_tutoria.php">
+                                <input type="hidden" name="csrf_token"
+                                    value="<?= e($_SESSION['csrf_solicitud']) ?>">
+
+                                <input type="hidden" name="materia_id"
+                                    value="<?= (int)$materia['id'] ?>">
+
+                                <input type="hidden" name="oferta_id"
+                                    value="<?= (int)$tutor['oferta_id'] ?>">
+
+                                <input type="hidden" name="tutor_id"
+                                    value="<?= (int)$tutor['tutor_id'] ?>">
+
+                                <label for="tipo-<?= (int)$tutor['oferta_id'] ?>">
+                                    ¿Qué necesitas?
+                                </label>
+
+                                <select
+                                    id="tipo-<?= (int)$tutor['oferta_id'] ?>"
+                                    name="tipo"
+                                    class="tipo-solicitud"
+                                    required>
+                                    <option value="reserva">Reservar una tutoría</option>
+                                    <option value="consulta_tema">Consultar otro tema</option>
+                                </select>
+
+                                <label for="tema-<?= (int)$tutor['oferta_id'] ?>">
+                                    Tema que necesitas aprender
+                                </label>
+
+                                <input
+                                    type="text"
+                                    id="tema-<?= (int)$tutor['oferta_id'] ?>"
+                                    name="tema_solicitado"
+                                    list="lista-temas-<?= (int)$tutor['oferta_id'] ?>"
+                                    maxlength="180"
+                                    placeholder="Ej. Ciclos en Python"
+                                    required>
+
+                                <datalist id="lista-temas-<?= (int)$tutor['oferta_id'] ?>">
+                                    <?php foreach ($tutor['temas'] as $tema): ?>
+                                        <option value="<?= e($tema['tema']) ?>">
+                                    <?php endforeach; ?>
+                                </datalist>
+
+                                <label for="horario-<?= (int)$tutor['oferta_id'] ?>">
+                                    Horario disponible
+                                </label>
+
+                                <select
+                                    id="horario-<?= (int)$tutor['oferta_id'] ?>"
+                                    name="disponibilidad_id"
+                                    class="horario-solicitud">
+
+                                    <option value="">Selecciona un horario</option>
+
+                                    <?php foreach ($tutor['horarios'] as $horario): ?>
+                                        <option value="<?= (int)$horario['id'] ?>">
+                                            <?= e(date('d/m/Y', strtotime($horario['fecha']))) ?>
+                                            — <?= e(substr($horario['hora_inicio'], 0, 5)) ?>
+                                            a <?= e(substr($horario['hora_fin'], 0, 5)) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+
+                                <label for="descripcion-<?= (int)$tutor['oferta_id'] ?>">
+                                    Describe tu duda (opcional)
+                                </label>
+
+                                <textarea
+                                    id="descripcion-<?= (int)$tutor['oferta_id'] ?>"
+                                    name="descripcion_necesidad"
+                                    rows="3"
+                                    maxlength="5000"
+                                    placeholder="¿Qué necesitas repasar o resolver?"></textarea>
+
+                                <button class="button button-full" type="submit">
+                                    Enviar solicitud
+                                </button>
+                            </form>
+                        </div>
+                        
+                        <script>
+                        document.querySelectorAll('.tutor-actions').forEach(function (contenedor) {
+                            const tipo = contenedor.querySelector('.tipo-solicitud');
+                            const horario = contenedor.querySelector('.horario-solicitud');
+
+                            function actualizarHorario() {
+                                const esReserva = tipo.value === 'reserva';
+
+                                horario.required = esReserva;
+                                horario.disabled = !esReserva;
+
+                                if (!esReserva) {
+                                    horario.value = '';
+                                }
+                            }
+
+                            tipo.addEventListener('change', actualizarHorario);
+                            actualizarHorario();
+                        });
+                        </script>
+
                     </article>
                 <?php endforeach; ?>
             </div>

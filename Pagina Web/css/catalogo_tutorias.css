@@ -1,0 +1,139 @@
+/* Hoja de estilos del catálogo de tutorías.
+   Se incluye porque no venía en el ZIP original. Mantiene los nombres
+   de clase utilizados por las páginas PHP del catálogo. */
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #263238;
+    background: #f4f6f9;
+}
+a { color: inherit; }
+.site-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px clamp(18px, 5vw, 64px);
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+.brand {
+    color: #263b63;
+    font-size: 1.35rem;
+    font-weight: 700;
+    text-decoration: none;
+}
+.header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.welcome, .muted, .field-help { color: #687386; }
+.page-container { width: min(1100px, calc(100% - 32px)); margin: 34px auto 64px; }
+.narrow-container { max-width: 760px; }
+.hero {
+    padding: clamp(24px, 5vw, 46px);
+    border-radius: 18px;
+    background: #eaf0fb;
+    margin-bottom: 30px;
+}
+.hero-compact { padding: 26px 30px; }
+.eyebrow {
+    margin: 0 0 8px;
+    color: #375b9a;
+    font-size: .82rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+h1 { margin: 0 0 12px; font-size: clamp(1.8rem, 4vw, 2.5rem); }
+h2 { margin-top: 0; }
+.hero p:last-child, .section-heading p { color: #5f6c7c; line-height: 1.6; }
+.section-heading { margin: 28px 0 18px; }
+.category-grid, .tutor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 18px;
+}
+.category-card, .subject-card, .tutor-card, .form-card, .notice {
+    background: #fff;
+    border: 1px solid #e1e6ee;
+    border-radius: 14px;
+    box-shadow: 0 4px 16px rgba(30, 48, 78, .05);
+}
+.category-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 210px;
+    padding: 22px;
+    text-decoration: none;
+    transition: transform .15s ease, box-shadow .15s ease;
+}
+.category-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(30,48,78,.1); }
+.category-icon { font-size: 1.8rem; color: #375b9a; }
+.category-card h3 { margin: 12px 0 8px; }
+.category-card p, .subject-card p, .tutor-card p { color: #687386; line-height: 1.5; }
+.card-footer { display: flex; justify-content: space-between; margin-top: auto; padding-top: 14px; color: #375b9a; font-weight: 700; }
+.subject-list { display: grid; gap: 14px; }
+.subject-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 22px; }
+.subject-card h3 { margin: 0 0 6px; }
+.subject-card p { margin: 0 0 8px; }
+.button {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px 16px;
+    border: 0;
+    border-radius: 9px;
+    background: #315b9b;
+    color: #fff;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+}
+.button:hover { background: #24477e; }
+.button-light { background: #edf1f7; color: #2c456e; }
+.button-light:hover { background: #dfe7f3; }
+.button-full { width: 100%; }
+.breadcrumbs { margin-bottom: 22px; color: #687386; }
+.breadcrumbs a { color: #315b9b; text-decoration: none; }
+.notice { padding: 22px; margin: 18px 0; }
+.notice-warning { border-left: 4px solid #d39b28; }
+.notice-error { border-left: 4px solid #c23d4b; color: #9c2634; }
+.form-card { display: grid; gap: 10px; padding: 26px; }
+.form-card label { margin-top: 6px; font-weight: 700; }
+.form-card input, .form-card select, .form-card textarea {
+    width: 100%;
+    padding: 11px 12px;
+    border: 1px solid #cbd3df;
+    border-radius: 8px;
+    font: inherit;
+    background: #fff;
+}
+.form-card input:focus, .form-card select:focus, .form-card textarea:focus {
+    outline: 2px solid #9bb8e8;
+    border-color: #315b9b;
+}
+.tutor-card { padding: 22px; }
+.tutor-card h3 { margin: 10px 0; }
+.tutor-avatar {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: #eaf0fb;
+    color: #315b9b;
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+.offer-title { color: #263b63 !important; font-weight: 700; }
+.topic-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e8ebf0; }
+.topic-block ul { padding-left: 20px; }
+.topic-block li { margin: 8px 0; }
+.topic-description { display: block; color: #687386; font-size: .9rem; }
+.tutor-actions { margin-top: 18px; }
+@media (max-width: 620px) {
+    .site-header { align-items: flex-start; flex-direction: column; }
+    .subject-card { align-items: flex-start; flex-direction: column; }
+    .subject-card .button { width: 100%; }
+    .form-card { padding: 20px; }
+}
