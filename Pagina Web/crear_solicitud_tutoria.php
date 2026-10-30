@@ -135,6 +135,7 @@ try {
              SET estado = 'solicitado'
              WHERE id = ?
                AND tutor_id = ?
+               AND oferta_id = ?
                AND estado = 'disponible'
                AND (
                    fecha > CURDATE()
@@ -146,9 +147,10 @@ try {
         );
 
         $stmt->bind_param(
-            "ii",
+            "iii",
             $disponibilidadId,
-            $tutorId
+            $tutorId,
+            $ofertaId
         );
 
         $stmt->execute();

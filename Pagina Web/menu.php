@@ -392,6 +392,9 @@ if (isset($stmt)) {
             <a href="crear_oferta_tutoria.php" class="btn-link">
                 <button type="button" class="btn">Ofrecer tutoría</button>
             </a>
+            <a href="gestionar_disponibilidad.php" class="btn-link">
+                <button type="button" class="btn">Gestionar horarios</button>
+            </a>
             <a href="solicitudes_tutor.php" class="btn-link">
                 <button type="button" class="btn">Solicitudes de tutoría</button>
             </a>
