@@ -260,7 +260,7 @@ try {
             throw new RuntimeException("Escribe una respuesta antes de atender la consulta.");
         }
 
-        $nuevo_estado = 'completada';
+        $nuevo_estado = 'respondida';
 
         $consulta = $conexion->prepare(
             "UPDATE solicitudes_tutorias

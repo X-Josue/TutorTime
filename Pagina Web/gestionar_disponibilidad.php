@@ -2,7 +2,6 @@
 <?php
 session_start();
 
-
 if (!isset($_SESSION['id']) || ($_SESSION['tipo'] ?? '') !== 'Tutor') {
     header("Location: login.php");
     exit();
@@ -19,8 +18,13 @@ if (empty($_SESSION['csrf_disponibilidad'])) {
 $mensaje = $_SESSION['mensaje_disponibilidad'] ?? '';
 unset($_SESSION['mensaje_disponibilidad']);
 
+function e($valor): string {
+    return htmlspecialchars((string) $valor, ENT_QUOTES, 'UTF-8');
+}
+
 // Registrar un nuevo horario
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
     $token = $_POST['csrf_token'] ?? '';
 
     if (
@@ -30,10 +34,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ) {
         $_SESSION['mensaje_disponibilidad'] =
             'La sesión de seguridad expiró. Inténtalo nuevamente.';
+
         header("Location: gestionar_disponibilidad.php");
         exit();
     }
 
+    $ofertaId = filter_input(INPUT_POST, 'oferta_id', FILTER_VALIDATE_INT);
     $fecha = $_POST['fecha'] ?? '';
     $horaInicio = $_POST['hora_inicio'] ?? '';
     $horaFin = $_POST['hora_fin'] ?? '';
@@ -49,9 +55,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $horaFinValida = is_string($horaFin) &&
         preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $horaFin);
 
-    if (!$fechaValida || !$horaInicioValida || !$horaFinValida) {
+    if (!$ofertaId || !$fechaValida || !$horaInicioValida || !$horaFinValida) {
+
         $_SESSION['mensaje_disponibilidad'] =
-            'Ingresa una fecha y horas válidas.';
+            'Selecciona una oferta e ingresa una fecha y horas válidas.';
+
         header("Location: gestionar_disponibilidad.php");
         exit();
     }
@@ -59,6 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($fecha < date('Y-m-d')) {
         $_SESSION['mensaje_disponibilidad'] =
             'No puedes publicar horarios de fechas pasadas.';
+
         header("Location: gestionar_disponibilidad.php");
         exit();
     }
@@ -66,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($horaFin <= $horaInicio) {
         $_SESSION['mensaje_disponibilidad'] =
             'La hora de fin debe ser posterior a la hora de inicio.';
+
         header("Location: gestionar_disponibilidad.php");
         exit();
     }
@@ -76,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ) {
         $_SESSION['mensaje_disponibilidad'] =
             'La hora de inicio debe ser futura.';
+
         header("Location: gestionar_disponibilidad.php");
         exit();
     }
@@ -83,14 +94,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $conexion->begin_transaction();
 
-        // Serializar las publicaciones del mismo tutor.
-        // Esto ayuda a evitar que dos peticiones simultáneas
-        // publiquen horarios que se solapan.
+        // Bloquear al usuario para evitar publicaciones simultáneas.
         $stmt = $conexion->prepare(
             "SELECT id FROM usuarios WHERE id = ? FOR UPDATE"
         );
+
         $stmt->bind_param("i", $tutorId);
         $stmt->execute();
+
         $usuario = $stmt->get_result()->fetch_assoc();
         $stmt->close();
 
@@ -98,9 +109,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('No se encontró el usuario.');
         }
 
-        // Dos intervalos se solapan cuando el inicio de uno
-        // es anterior al fin del otro y su fin es posterior
-        // al inicio del otro.
+        // Comprobar que la oferta pertenece al tutor y está publicada.
+        $stmt = $conexion->prepare(
+            "SELECT id
+             FROM tutor_ofertas
+             WHERE id = ?
+               AND tutor_id = ?
+               AND estado = 'publicada'
+             FOR UPDATE"
+        );
+
+        $stmt->bind_param("ii", $ofertaId, $tutorId);
+        $stmt->execute();
+
+        $oferta = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if (!$oferta) {
+            throw new RuntimeException(
+                'La oferta seleccionada no existe o no está publicada.'
+            );
+        }
+
+        // Evitar horarios que se crucen con otros del mismo tutor.
         $stmt = $conexion->prepare(
             "SELECT id
              FROM disponibilidad_tutores
@@ -119,7 +150,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $horaFin,
             $horaInicio
         );
+
         $stmt->execute();
+
         $solapamiento = $stmt->get_result()->fetch_assoc();
         $stmt->close();
 
@@ -131,15 +164,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $estado = 'disponible';
 
+        // Guardar el horario relacionado con la oferta seleccionada.
         $stmt = $conexion->prepare(
             "INSERT INTO disponibilidad_tutores
-                (tutor_id, fecha, hora_inicio, hora_fin, estado)
-             VALUES (?, ?, ?, ?, ?)"
+                (tutor_id, oferta_id, fecha, hora_inicio, hora_fin, estado)
+             VALUES (?, ?, ?, ?, ?, ?)"
         );
 
         $stmt->bind_param(
-            "issss",
+            "iissss",
             $tutorId,
+            $ofertaId,
             $fecha,
             $horaInicio,
             $horaFin,
@@ -152,9 +187,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conexion->commit();
 
         $_SESSION['mensaje_disponibilidad'] =
-            'El horario se publicó correctamente.';
+            'El horario se publicó correctamente y quedó asociado a la oferta.';
 
     } catch (Throwable $error) {
+
         try {
             $conexion->rollback();
         } catch (Throwable $errorRollback) {
@@ -176,18 +212,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit();
 }
 
-// Consultar únicamente los horarios del tutor conectado.
+// Consultar ofertas publicadas del tutor.
 $stmt = $conexion->prepare(
-    "SELECT id, fecha, hora_inicio, hora_fin, estado
-     FROM disponibilidad_tutores
+    "SELECT id, titulo
+     FROM tutor_ofertas
      WHERE tutor_id = ?
-     ORDER BY fecha ASC, hora_inicio ASC"
+       AND estado = 'publicada'
+     ORDER BY fecha_creacion DESC"
 );
 
 $stmt->bind_param("i", $tutorId);
 $stmt->execute();
-$resultado = $stmt->get_result();
 
+$resultadoOfertas = $stmt->get_result();
+$ofertas = [];
+
+while ($fila = $resultadoOfertas->fetch_assoc()) {
+    $ofertas[] = $fila;
+}
+
+$stmt->close();
+
+// Consultar horarios del tutor y su oferta relacionada.
+$stmt = $conexion->prepare(
+    "SELECT d.id, d.fecha, d.hora_inicio, d.hora_fin,
+            d.estado, d.oferta_id, o.titulo AS oferta_titulo
+     FROM disponibilidad_tutores d
+     LEFT JOIN tutor_ofertas o ON o.id = d.oferta_id
+     WHERE d.tutor_id = ?
+     ORDER BY d.fecha ASC, d.hora_inicio ASC"
+);
+
+$stmt->bind_param("i", $tutorId);
+$stmt->execute();
+
+$resultado = $stmt->get_result();
 $horarios = [];
 
 while ($fila = $resultado->fetch_assoc()) {
@@ -195,17 +254,16 @@ while ($fila = $resultado->fetch_assoc()) {
 }
 
 $stmt->close();
-
-function e($valor): string {
-    return htmlspecialchars((string) $valor, ENT_QUOTES, 'UTF-8');
-}
 ?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>Gestionar horarios - TutorTime</title>
+
     <link rel="stylesheet" href="css/menu.css">
 
     <style>
@@ -235,7 +293,8 @@ function e($valor): string {
             font-weight: bold;
         }
 
-        .horarios-form input {
+        .horarios-form input,
+        .horarios-form select {
             width: 100%;
             box-sizing: border-box;
             padding: 10px;
@@ -271,6 +330,7 @@ function e($valor): string {
         }
     </style>
 </head>
+
 <body>
 
 <header class="header">
@@ -288,7 +348,9 @@ function e($valor): string {
 </header>
 
 <main class="horarios-container">
+
     <h1>Gestionar disponibilidad</h1>
+
     <p>Publica los horarios en los que puedes ofrecer tutorías.</p>
 
     <?php if ($mensaje !== ''): ?>
@@ -298,86 +360,161 @@ function e($valor): string {
     <?php endif; ?>
 
     <section class="horarios-card">
+
         <h2>Publicar un horario</h2>
 
-        <form method="POST" class="horarios-form">
-            <input
-                type="hidden"
-                name="csrf_token"
-                value="<?php echo e($_SESSION['csrf_disponibilidad']); ?>"
-            >
+        <?php if (count($ofertas) > 0): ?>
 
-            <div>
-                <label for="fecha">Fecha</label>
+            <form method="POST" class="horarios-form">
+
                 <input
-                    type="date"
-                    id="fecha"
-                    name="fecha"
-                    min="<?php echo date('Y-m-d'); ?>"
-                    required
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?php echo e($_SESSION['csrf_disponibilidad']); ?>"
                 >
-            </div>
 
-            <div>
-                <label for="hora_inicio">Hora de inicio</label>
-                <input
-                    type="time"
-                    id="hora_inicio"
-                    name="hora_inicio"
-                    required
-                >
-            </div>
+                <div>
+                    <label for="oferta_id">Oferta de tutoría</label>
 
-            <div>
-                <label for="hora_fin">Hora de fin</label>
-                <input
-                    type="time"
-                    id="hora_fin"
-                    name="hora_fin"
-                    required
-                >
-            </div>
+                    <select id="oferta_id" name="oferta_id" required>
+                        <option value="">Selecciona una oferta</option>
 
-            <button type="submit" class="btn">
-                Publicar horario
-            </button>
-        </form>
+                        <?php foreach ($ofertas as $oferta): ?>
+                            <option value="<?php echo (int) $oferta['id']; ?>">
+                                <?php echo e($oferta['titulo']); ?>
+                            </option>
+                        <?php endforeach; ?>
+
+                    </select>
+                </div>
+
+                <div>
+                    <label for="fecha">Fecha</label>
+
+                    <input
+                        type="date"
+                        id="fecha"
+                        name="fecha"
+                        min="<?php echo date('Y-m-d'); ?>"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label for="hora_inicio">Hora de inicio</label>
+
+                    <input
+                        type="time"
+                        id="hora_inicio"
+                        name="hora_inicio"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label for="hora_fin">Hora de fin</label>
+
+                    <input
+                        type="time"
+                        id="hora_fin"
+                        name="hora_fin"
+                        required
+                    >
+                </div>
+
+                <button type="submit" class="btn">
+                    Publicar horario
+                </button>
+
+            </form>
+
+        <?php else: ?>
+
+            <p>
+                Todavía no tienes ofertas publicadas.
+                Primero publica una oferta para poder agregarle horarios.
+            </p>
+
+            <a href="crear_oferta_tutoria.php" class="btn">
+                Crear oferta
+            </a>
+
+        <?php endif; ?>
+
     </section>
 
     <section class="horarios-card">
+
         <h2>Mis horarios publicados</h2>
 
         <?php if (count($horarios) > 0): ?>
+
             <div class="tabla-scroll">
+
                 <table class="tabla-horarios">
+
                     <thead>
                         <tr>
+                            <th>Oferta</th>
                             <th>Fecha</th>
                             <th>Inicio</th>
                             <th>Fin</th>
                             <th>Estado</th>
                         </tr>
                     </thead>
+
                     <tbody>
+
                         <?php foreach ($horarios as $horario): ?>
+
                             <tr>
-                                <td><?php echo e($horario['fecha']); ?></td>
-                                <td><?php echo e(substr($horario['hora_inicio'], 0, 5)); ?></td>
-                                <td><?php echo e(substr($horario['hora_fin'], 0, 5)); ?></td>
-                                <td><?php echo e($horario['estado']); ?></td>
+                                <td>
+                                    <?php
+                                    echo e(
+                                        $horario['oferta_titulo']
+                                        ?? 'Sin oferta asociada'
+                                    );
+                                    ?>
+                                </td>
+
+                                <td>
+                                    <?php echo e($horario['fecha']); ?>
+                                </td>
+
+                                <td>
+                                    <?php echo e(substr($horario['hora_inicio'], 0, 5)); ?>
+                                </td>
+
+                                <td>
+                                    <?php echo e(substr($horario['hora_fin'], 0, 5)); ?>
+                                </td>
+
+                                <td>
+                                    <?php echo e($horario['estado']); ?>
+                                </td>
                             </tr>
+
                         <?php endforeach; ?>
+
                     </tbody>
+
                 </table>
+
             </div>
+
         <?php else: ?>
+
             <p>Aún no has publicado horarios.</p>
+
         <?php endif; ?>
+
     </section>
+
 </main>
 
 </body>
 </html>
+
 <?php
 $conexion->close();
 ?>
