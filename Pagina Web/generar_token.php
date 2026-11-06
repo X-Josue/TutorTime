@@ -1,6 +1,5 @@
-
 <?php
-
+    use Firebase\JWT\JWT;
 session_start();
 
 header('Content-Type: application/json; charset=utf-8');
@@ -20,14 +19,73 @@ if (!isset($_SESSION['id'])) {
 }
 
 // =====================================================
-// 2. CARGAR ARCHIVOS
+// 2. CARGAR CONFIGURACION
 // =====================================================
 
-require_once "conexion.php";
-require_once "C:/xampp/jaas/jaas_config.php";
-require_once dirname(__DIR__) . "/vendor/autoload.php";
+try {
 
-use Firebase\JWT\JWT;
+    // Conexion a la base de datos.
+    require_once __DIR__ . '/conexion.php';
+
+    // Dependencias de Composer.
+    require_once dirname(__DIR__) . '/vendor/autoload.php';
+
+    // Detectar si las credenciales de JaaS vienen
+    // de variables de entorno (Render).
+    $jaasAppId = getenv('JAAS_APP_ID');
+    $jaasApiKeyId = getenv('JAAS_API_KEY_ID');
+    $jaasPrivateKeyPath = getenv('JAAS_PRIVATE_KEY_PATH');
+
+    if (
+        $jaasAppId !== false &&
+        $jaasApiKeyId !== false
+    ) {
+
+        // Configuracion para Render.
+        define('JAAS_APP_ID', $jaasAppId);
+        define('JAAS_API_KEY_ID', $jaasApiKeyId);
+
+        define(
+            'JAAS_PRIVATE_KEY_PATH',
+            $jaasPrivateKeyPath !== false
+                ? $jaasPrivateKeyPath
+                : '/etc/secrets/jaas_private.pem'
+        );
+
+    } else {
+
+        // Configuracion local de XAMPP.
+        require_once 'C:/xampp/jaas/jaas_config.php';
+
+    }
+
+    // Verificar que existan las constantes.
+    if (
+        !defined('JAAS_APP_ID') ||
+        !defined('JAAS_API_KEY_ID') ||
+        !defined('JAAS_PRIVATE_KEY_PATH')
+    ) {
+        throw new Exception('Configuracion JaaS incompleta.');
+    }
+
+    // Cargar biblioteca JWT.
+
+
+} catch (Throwable $e) {
+
+    error_log(
+        'Error cargando configuracion TutorTime: ' .
+        $e->getMessage()
+    );
+
+    http_response_code(500);
+
+    echo json_encode([
+        'error' => 'No fue posible cargar la configuracion del servidor.'
+    ]);
+
+    exit;
+}
 
 // =====================================================
 // 3. VALIDAR DATOS DEL USUARIO
@@ -157,20 +215,23 @@ $moderador = $esTutor;
 
 try {
 
-    if (!file_exists(JAAS_PRIVATE_KEY_PATH)) {
-        throw new Exception("No se encontro la clave privada.");
+    if (
+        !file_exists(JAAS_PRIVATE_KEY_PATH) ||
+        !is_readable(JAAS_PRIVATE_KEY_PATH)
+    ) {
+        throw new Exception('No se encontro la clave privada.');
     }
 
     $clave = file_get_contents(JAAS_PRIVATE_KEY_PATH);
 
     if ($clave === false) {
-        throw new Exception("No se pudo leer la clave privada.");
+        throw new Exception('No se pudo leer la clave privada.');
     }
 
     $clavePrivada = openssl_pkey_get_private($clave);
 
     if ($clavePrivada === false) {
-        throw new Exception("La clave privada no es valida.");
+        throw new Exception('La clave privada no es valida.');
     }
 
     $ahora = time();
@@ -217,6 +278,7 @@ try {
         JAAS_API_KEY_ID
     );
 
+    // Liberar la clave.
     openssl_free_key($clavePrivada);
 
     // =================================================
@@ -238,7 +300,7 @@ try {
 } catch (Throwable $e) {
 
     error_log(
-        "Error generando JWT JaaS: " . $e->getMessage()
+        'Error generando JWT JaaS: ' . $e->getMessage()
     );
 
     http_response_code(500);
